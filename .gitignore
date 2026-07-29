@@ -1,0 +1,41 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+*.local
+
+# Environment variables / secrets — never commit these
+.env
+.env.*
+!.env.example
+
+# Keys, certificates, credentials
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+credentials.json
+secrets.json
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+
+# Vite / build cache
+.vite
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# TypeScript build info
+*.tsbuildinfo
+.git-old/

@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>לוח בקרה — נכסי אירוח באירופה</title>
+<!--
+  גרסה עצמאית שעובדת בדאבל-קליק — ללא התקנה.
+  מעלים קובץ Excel (במבנה שתואר) והנתונים מתעדכנים. הקובץ נקרא בלבד,
+  ולא עוזב את המחשב (הכול קורה בדפדפן).
+-->
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  body { font-family: 'Rubik', system-ui, Arial, sans-serif; background:#f3f5f9; }
+  .navbtn.active { background:#244ed1; color:#fff; }
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px}
+</style>
+</head>
+<body class="text-slate-800">
+<div class="flex min-h-screen">
+  <!-- Sidebar -->
+  <aside class="w-60 shrink-0 bg-white border-l border-slate-200 hidden lg:flex flex-col">
+    <nav id="sidebar" class="p-3 space-y-1 text-sm flex-1"></nav>
+    <div class="p-3 border-t border-slate-100"><div id="sideStatus" class="text-xs rounded-lg px-3 py-2"></div></div>
+  </aside>
+
+  <main class="flex-1 min-w-0">
+    <!-- Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+      <div class="px-5 h-16 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-blue-700 text-white flex items-center justify-center text-lg font-bold">ב</div>
+          <div>
+            <h1 class="font-bold text-lg leading-tight">לוח בקרה — נכסי אירוח באירופה</h1>
+            <p class="text-slate-400 text-xs">מערכת ניהול רווח והפסד לנכסים</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="hidden md:flex flex-col items-end gap-1">
+            <span id="connBadge"></span>
+            <span id="updatedAt" class="text-slate-400 text-xs"></span>
+          </div>
+          <button id="demoBtn" class="hidden sm:inline-flex items-center gap-1.5 text-sm text-slate-600 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50">נתוני דמו</button>
+          <button id="uploadBtn" class="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg px-4 py-2">⬆ העלאת קובץ Excel</button>
+          <input id="fileInput" type="file" accept=".xlsx,.xls" class="hidden" />
+        </div>
+      </div>
+      <div id="statusBar" class="px-5 py-1.5 text-xs"></div>
+    </header>
+
+    <!-- horizontal nav for small screens -->
+    <div id="hnav" class="lg:hidden bg-white border-b border-slate-200 overflow-x-auto"><div class="flex gap-1 p-2 w-max"></div></div>
+
+    <div class="p-5 max-w-[1400px] mx-auto">
+      <div id="dropzone" class="mb-5 hidden cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white hover:bg-slate-50 px-6 py-7 text-center">
+        <div class="flex flex-col items-center gap-1">
+          <div class="w-12 h-12 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center text-2xl">⬆</div>
+          <p class="font-semibold">גרור לכאן את קובץ ה-Excel, או לחץ לבחירת קובץ</p>
+          <p class="text-slate-400 text-sm">המסכים מציגים כרגע נתוני דמו. עם העלאת הקובץ — כל הנתונים יתעדכנו לפיו.</p>
+        </div>
+      </div>
+      <div id="page" class="space-y-5"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ============ עזרי פורמט ============ */
+const eur0 = new Intl.NumberFormat('he-IL',{style:'currency',currency:'EUR',maximumFractionDigits:0});
+const num0 = new Intl.NumberFormat('he-IL',{maximumFractionDigits:0});
+const fmtEUR = n => isFinite(n) ? eur0.format(n) : '—';
+const fmtNum = n => isFinite(n) ? num0.format(n) : '—';
+const fmtPct = (f,d=1) => isFinite(f) ? (f*100).toFixed(d)+'%' : '—';
+const HE_MONTHS=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)? '—' : d.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+function fmtDateTime(d){ if(!d) return '—'; return new Date(d).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+function monthKey(iso){ if(!iso) return null; const d=new Date(iso); if(isNaN(d)) return null; return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0'); }
+function monthLabel(k){ const [y,m]=k.split('-').map(Number); return (HE_MONTHS[m-1]||'')+' '+y; }
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ============ תרגום ערכים מאנגלית לעברית (לתצוגה בלבד) ============ */
+const TR={
+  // פלטפורמות
+  'Booking':'בוקינג','AirBNB':'Airbnb','Airbnb':'Airbnb','CasualCustomer':'לקוח מזדמן','Casual customer':'לקוח מזדמן','Walk-in':'לקוח מזדמן',
+  // סטטוס הזמנה / חדר / תחזוקה
+  'Booked':'מוזמן','Available':'זמין','UNavailable':'לא זמין','Unavailable':'לא זמין','Not available':'לא זמין',
+  'Need repair & Available':'דרוש תיקון (זמין)','Need repair':'דרוש תיקון','Need repair & Not available':'דרוש תיקון (לא זמין)',
+  // סטטוס תשלום
+  'Paid':'שולם','Not paid':'לא שולם','Partly paid':'שולם חלקית',
+  // אמצעי תשלום
+  'Cash':'מזומן','Card':'כרטיס אשראי','Transfer':'העברה בנקאית','PayPal':'PayPal',
+  // סוגי הכנסה נוספת
+  'Food':'אוכל','Drink':'שתייה','Party':'אירוע','Laundry':'כביסה','Parking':'חניה',
+  // סוגי הוצאה
+  'Salary':'שכר עבודה','Heating':'חימום','Electricity bill':'חשמל','Electricity':'חשמל','Water bill':'מים','Water':'מים',
+  'Gas bill':'גז','Gas':'גז','Groceries':'מצרכים','Fuel':'דלק ורכב','Car & Fuel':'דלק ורכב','Internet':'אינטרנט',
+  'Taxes':'מיסים','Maintence':'תחזוקה','Maintenance':'תחזוקה','Garbage bill':'אשפה','Accouting':'הנהלת חשבונות',
+  'Accounting':'הנהלת חשבונות','Commision':'עמלות','Commission':'עמלות','Other':'אחר','Advertising':'פרסום/עמלות',
+  // מדינות
+  'Germany':'גרמניה','Italy':'איטליה','Luxembourg':'לוקסמבורג','France':'צרפת','Spain':'ספרד','Switzerland':'שווייץ',
+  // סוגי חדר
+  'GroundFloor':'קומת קרקע','EconomyDouble':'זוגי חסכוני','Standard':'סטנדרט','Suite':'סוויטה','Studio':'סטודיו',
+};
+const T=v=>{ if(v==null||v==='') return v; const k=String(v).trim(); return TR[k]!=null?TR[k]:v; };
+// סיווג פלטפורמה לקבוצה (ל-P&L): booking / airbnb / casual
+function platGroup(p){ const s=String(p||'').toLowerCase(); if(s.includes('book'))return 'booking'; if(s.includes('air'))return 'airbnb'; return 'casual'; }
+
+/* ============ נורמליזציה (תומך בשגיאות הכתיב) ============ */
+function canon(k){ return String(k).toLowerCase().replace(/[\s_%.\-#]/g,'').trim(); }
+function idxRow(r){ const m={}; for(const k in r) m[canon(k)]=r[k]; return m; }
+function pick(i,...al){ for(const a of al){ const c=canon(a); if(i[c]!==undefined && i[c]!==null && i[c]!=='') return i[c]; } return undefined; }
+function toStr(v){ return v==null?'':String(v).trim(); }
+function toNum(v){ if(v==null||v==='') return 0; if(typeof v==='number') return isFinite(v)?v:0; const c=String(v).replace(/[^0-9.,-]/g,'').replace(/,/g,''); const n=parseFloat(c); return isNaN(n)?0:n; }
+function toPct(v){ const n=toNum(v); return n>1?n/100:n; }
+function toISO(v){ if(v==null||v==='') return null; if(v instanceof Date) return isNaN(v)?null:v.toISOString(); if(typeof v==='number'){ const d=new Date(Math.round((v-25569)*86400*1000)); return isNaN(d)?null:d.toISOString(); } const d=new Date(v); return isNaN(d)?null:d.toISOString(); }
+
+function parseWorkbook(ab){
+  const wb = XLSX.read(ab,{type:'array',cellDates:true});
+  const byc={}; wb.SheetNames.forEach(n=>byc[canon(n)]=wb.Sheets[n]);
+  const get=(...al)=>{ for(const a of al){ const ws=byc[canon(a)]; if(ws) return ws; } return null; };
+  const rows=ws=> ws? XLSX.utils.sheet_to_json(ws,{defval:'',raw:false}) : [];
+  // Properties — שתי טבלאות באותו גיליון. נקרא כמערך-של-מערכים (positional)
+  // טבלה 1: עמודות A-C (כותרת בשורה 1). טבלה 2: עמודות E-H (כותרת מזוהה דינמית,
+  // כי בקובץ האמיתי יש כותרת "Commission Rates" בשורה 1 וה-Key מתחיל בשורה 2).
+  const pws=get('Properties');
+  let properties=[], platformCommissions=[];
+  if(pws){
+    const aoa=XLSX.utils.sheet_to_json(pws,{header:1,defval:null});
+    for(let r=1;r<aoa.length;r++){ const row=aoa[r]||[]; if(toStr(row[0])){ properties.push({propertyId:toStr(row[0]),propertyName:toStr(row[1]),country:toStr(row[2])}); } }
+    // איתור שורת הכותרת של טבלת העמלות (העמודה E מכילה "Key")
+    let hr=-1; for(let r=0;r<aoa.length;r++){ if(canon(toStr((aoa[r]||[])[4]))==='key'){ hr=r; break; } }
+    if(hr>=0){ for(let r=hr+1;r<aoa.length;r++){ const row=aoa[r]||[]; if(toStr(row[5])){ platformCommissions.push({key:toStr(row[4]),propertyId:toStr(row[5]),platform:toStr(row[6]),commissionPct:toPct(row[7])}); } } }
+  }
+  const rooms = rows(get('Rooms')).map(r=>{const i=idxRow(r);return{propertyId:toStr(pick(i,'PropertyID')),propertyName:toStr(pick(i,'ProperyName','PropertyName')),country:toStr(pick(i,'country','Country')),roomNumber:toNum(pick(i,'RoomNumber','Room')),roomType:toStr(pick(i,'RoomType')),maxGuests:toNum(pick(i,'MaxGuests')),status:toStr(pick(i,'Status')),notes:toStr(pick(i,'Notes'))};}).filter(r=>r.propertyId);
+  const occupation = rows(get('occupation','Occupation')).map(r=>{const i=idxRow(r);return{propertyId:toStr(pick(i,'PropertyID')),roomNumber:toNum(pick(i,'RoomNumber')),status:toStr(pick(i,'Status')),checkInDate:toISO(pick(i,'Check-in Date','CheckinDate','CheckIn')),checkOutDate:toISO(pick(i,'Check-out Date','CheckoutDate','CheckOut')),nights:toNum(pick(i,'Nights')),guestName:toStr(pick(i,'GuestName')),numberOfGuests:toNum(pick(i,'NumberOfGuests','Guests')),totalPrice:toNum(pick(i,'TotalPrice')),totalNetPrice:toNum(pick(i,'TotalNetPrice','NetPrice')),platform:toStr(pick(i,'Platform')),paidBy:toStr(pick(i,'PaidBy')),notes:toStr(pick(i,'Notes')),month:toStr(pick(i,'Month')),commission:toNum(pick(i,'commission','Commission'))};}).filter(o=>o.propertyId);
+  const extras = rows(get('Extras')).map(r=>{const i=idxRow(r);return{propertyId:toStr(pick(i,'PropertyID')),date:toISO(pick(i,'Date')),incomeType:toStr(pick(i,'IncomeType')),amount:toNum(pick(i,'Amount')),paidBy:toStr(pick(i,'PaidBy')),month:toISO(pick(i,'Month'))||toStr(pick(i,'Month'))};}).filter(e=>e.propertyId);
+  const maintenance = rows(get('Maintence','Maintenance')).map(r=>{const i=idxRow(r);return{propertyId:toStr(pick(i,'PropertyID')),date:toISO(pick(i,'Date')),roomNumber:pick(i,'RoomNumber')!==undefined?toNum(pick(i,'RoomNumber')):null,reportBy:toStr(pick(i,'ReportedBy','ReportBy','Report By')),amount:toNum(pick(i,'Amount')),status:toStr(pick(i,'Status')),supervisor:toStr(pick(i,'Supervisor')),notes:toStr(pick(i,'Notes'))};}).filter(m=>m.propertyId);
+  const expenses = rows(get('Expenses')).map(r=>{const i=idxRow(r);return{propertyId:toStr(pick(i,'PropertyID')),invoiceDate:toISO(pick(i,'InvocieDate','InvoiceDate')),expensesType:toStr(pick(i,'ExpensesType','ExpenseType')),fullAmount:toNum(pick(i,'FullAmount')),paidAmount:toNum(pick(i,'PaidAmount')),leftAmount:toNum(pick(i,'LeftAmount')),status:toStr(pick(i,'Status')),paidBy:toStr(pick(i,'PaidBy')),billingDate:toISO(pick(i,'BillingDate')),paymentDate:toISO(pick(i,'PaymentDate')),reportBy:toStr(pick(i,'ReportedBy','ReportBy','Report By')),confirmBy:toStr(pick(i,'ConfirmedBy','ConfirmBy','Confirm By')),notes:toStr(pick(i,'Notes')),month:toISO(pick(i,'Month'))};}).filter(e=>e.propertyId);
+  // גיליון נפרד "One-time expenses" — מבנה זהה ל-Expenses, אך מאגר נתונים נפרד לחלוטין
+  const oneTimeExpenses = rows(get('One-time expenses','One-time Expenses','OneTimeExpenses')).map(r=>{const i=idxRow(r);return{propertyId:toStr(pick(i,'PropertyID')),invoiceDate:toISO(pick(i,'InvocieDate','InvoiceDate')),expensesType:toStr(pick(i,'ExpensesType','ExpenseType')),fullAmount:toNum(pick(i,'FullAmount')),paidAmount:toNum(pick(i,'PaidAmount')),leftAmount:toNum(pick(i,'LeftAmount')),status:toStr(pick(i,'Status')),paidBy:toStr(pick(i,'PaidBy')),billingDate:toISO(pick(i,'BillingDate')),paymentDate:toISO(pick(i,'PaymentDate')),reportBy:toStr(pick(i,'ReportedBy','ReportBy','Report By')),confirmBy:toStr(pick(i,'ConfirmedBy','ConfirmBy','Confirm By')),notes:toStr(pick(i,'Notes')),month:toISO(pick(i,'Month'))};}).filter(e=>e.propertyId);
+  return {properties,platformCommissions,rooms,occupation,extras,maintenance,expenses,oneTimeExpenses};
+}
+
+/* ============ נתוני דמו ============ */
+function rng(seed){let a=seed;return()=>{a|=0;a=(a+0x6d2b79f5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
+function buildMock(){
+  const rand=rng(20260615); const pickOne=a=>a[Math.floor(rand()*a.length)]; const betw=(lo,hi)=>Math.round(lo+rand()*(hi-lo)); const r2=n=>Math.round(n*100)/100;
+  const props=[{propertyId:'BF',propertyName:'Black Forest Hotel',country:'גרמניה'},{propertyId:'CH1',propertyName:'Chemnitz Apartments',country:'גרמניה'},{propertyId:'TAB1',propertyName:'Helvetia Tabiano',country:'איטליה'},{propertyId:'TAV',propertyName:'Tavernola Apartments',country:'איטליה'}];
+  const pc=props.flatMap(p=>[{key:p.propertyId+'-Booking.com',propertyId:p.propertyId,platform:'Booking.com',commissionPct:0.15},{key:p.propertyId+'-Airbnb',propertyId:p.propertyId,platform:'Airbnb',commissionPct:0.14},{key:p.propertyId+'-מזדמן',propertyId:p.propertyId,platform:'אורח מזדמן',commissionPct:0}]);
+  const rc={BF:8,CH1:5,TAB1:6,TAV:4}; const rt=['סטנדרט','דה-לוקס','סוויטה','סטודיו','משפחתי'];
+  const rooms=props.flatMap(p=>Array.from({length:rc[p.propertyId]},(_,i)=>{const st=rand()<0.9?'זמין':'לא זמין';return{propertyId:p.propertyId,propertyName:p.propertyName,country:p.country,roomNumber:101+i,roomType:pickOne(rt),maxGuests:betw(2,5),status:st,notes:st==='לא זמין'?'בשיפוץ':''};}));
+  const months=[[2026,1],[2026,2],[2026,3],[2026,4],[2026,5],[2026,6]];
+  const names=['Müller','Rossi','Schneider','Bianchi','Weber','Ferrari','Fischer','Romano','Becker','Greco'];
+  const paidBy=['כרטיס אשראי','מזומן','העברה בנקאית','PayPal']; const base={BF:140,CH1:95,TAB1:120,TAV:105};
+  const occupation=[];
+  for(const p of props){ const prooms=rooms.filter(r=>r.propertyId===p.propertyId);
+    for(const [y,m] of months){ const sf=m>=4?1.5:1; const n=Math.round(prooms.length*(1.3+rand())*sf);
+      for(let b=0;b<n;b++){ const room=pickOne(prooms); const plat=rand()<0.55?'Booking.com':rand()<0.8?'Airbnb':'אורח מזדמן'; const nights=betw(1,6); const day=betw(1,26);
+        const ci=new Date(Date.UTC(y,m-1,day)), co=new Date(Date.UTC(y,m-1,day+nights)); const nightly=base[p.propertyId]*(0.85+rand()*0.5); const gross=r2(nightly*nights);
+        const cp=plat==='Booking.com'?0.15:plat==='Airbnb'?0.14:0; const comm=r2(gross*cp);
+        occupation.push({propertyId:p.propertyId,roomNumber:room.roomNumber,status:'Booked',checkInDate:ci.toISOString(),checkOutDate:co.toISOString(),nights,guestName:pickOne(names),numberOfGuests:betw(1,room.maxGuests),totalPrice:gross,totalNetPrice:r2(gross-comm),platform:plat,paidBy:pickOne(paidBy),notes:'',month:(HE_MONTHS[m-1]+' '+y),commission:comm});
+      } } }
+  const et=['ארוחת בוקר','חניה','מיני-בר','כביסה','העברה משדה התעופה']; const extras=[];
+  for(const p of props) for(const [y,m] of months){ const c=betw(2,6); for(let i=0;i<c;i++) extras.push({propertyId:p.propertyId,date:new Date(Date.UTC(y,m-1,betw(1,27))).toISOString(),incomeType:pickOne(et),amount:r2(betw(8,60)),paidBy:pickOne(paidBy)}); }
+  const exT=['שכר עבודה','חשמל','חימום','מים','מצרכים','דלק ורכב','אינטרנט','מיסים','תחזוקה','הנהלת חשבונות','אחר'];
+  const exB={'שכר עבודה':[1500,4500],'חשמל':[200,700],'חימום':[150,600],'מים':[80,250],'מצרכים':[150,500],'דלק ורכב':[60,280],'אינטרנט':[40,90],'מיסים':[300,1200],'תחזוקה':[100,800],'הנהלת חשבונות':[120,300],'אחר':[40,250]};
+  const sup=['שרה לוי','דוד כהן','ספק חשמל EnBW','עיריית קמניץ','רו"ח מזרחי']; const expenses=[];
+  for(const p of props) for(const [y,m] of months) for(const t of exT){ if(t==='אחר'&&rand()<0.5)continue; if(t==='דלק ורכב'&&rand()<0.4)continue; const [lo,hi]=exB[t]; const full=r2(betw(lo,hi)); const rr=rand(); const st=rr<0.7?'שולם':rr<0.88?'שולם חלקית':'לא שולם'; const paid=st==='שולם'?full:st==='שולם חלקית'?r2(full*(0.3+rand()*0.4)):0; const inv=new Date(Date.UTC(y,m-1,betw(1,15)));
+    expenses.push({propertyId:p.propertyId,invoiceDate:inv.toISOString(),expensesType:t,fullAmount:full,paidAmount:paid,leftAmount:r2(full-paid),status:st,paidBy:pickOne(paidBy),billingDate:new Date(Date.UTC(y,m-1,1)).toISOString(),paymentDate:st==='שולם'?new Date(Date.UTC(y,m-1,betw(16,28))).toISOString():null,reportBy:pickOne(sup),confirmBy:'נועם',notes:st!=='שולם'?'ממתין לאישור תשלום':'',month:new Date(Date.UTC(y,m-1,1)).toISOString()}); }
+  const mst=['פתוח','בטיפול','טופל']; const mr=['שרה לוי','דוד כהן','מנהל הנכס','צוות ניקיון']; const maintenance=[];
+  for(const p of props){ const prooms=rooms.filter(r=>r.propertyId===p.propertyId); const c=betw(2,5); for(let i=0;i<c;i++){ const [y,m]=pickOne(months); maintenance.push({propertyId:p.propertyId,date:new Date(Date.UTC(y,m-1,betw(1,27))).toISOString(),roomNumber:pickOne(prooms).roomNumber,reportBy:pickOne(mr),amount:r2(betw(20,600)),status:pickOne(mst),supervisor:pickOne(['נועם','מנהל אזור'])}); } }
+  // הוצאות חד-פעמיות (One-time expenses) — מאגר נפרד לגמרי מ-Expenses, 1-3 פריטים לנכס
+  const otT=['שיפוץ','רכישת ריהוט','רכישת ציוד','ייעוץ משפטי','מערכת מיזוג','רישוי ואגרות'];
+  const otB={'שיפוץ':[2000,12000],'רכישת ריהוט':[500,4000],'רכישת ציוד':[300,2500],'ייעוץ משפטי':[400,1800],'מערכת מיזוג':[1200,6000],'רישוי ואגרות':[200,900]};
+  const oneTimeExpenses=[];
+  for(const p of props){ const c=betw(1,3); for(let i=0;i<c;i++){ const t=pickOne(otT); const [y,m]=pickOne(months); const [lo,hi]=otB[t]; const full=r2(betw(lo,hi)); const rr=rand(); const st=rr<0.6?'שולם':rr<0.85?'שולם חלקית':'לא שולם'; const paid=st==='שולם'?full:st==='שולם חלקית'?r2(full*(0.3+rand()*0.4)):0; const inv=new Date(Date.UTC(y,m-1,betw(1,26)));
+    oneTimeExpenses.push({propertyId:p.propertyId,invoiceDate:inv.toISOString(),expensesType:t,fullAmount:full,paidAmount:paid,leftAmount:r2(full-paid),status:st,paidBy:pickOne(paidBy),billingDate:inv.toISOString(),paymentDate:st==='שולם'?new Date(Date.UTC(y,m-1,betw(20,28))).toISOString():null,reportBy:pickOne(sup),confirmBy:'נועם',notes:st!=='שולם'?'ממתין לאישור תשלום':'',month:new Date(Date.UTC(y,m-1,1)).toISOString()}); } }
+  return {properties:props,platformCommissions:pc,rooms,occupation,extras,maintenance,expenses,oneTimeExpenses};
+}
+
+/* ============ חישובים ============ */
+const sum=a=>a.reduce((x,y)=>x+y,0);
+// סיווג לפי חודש לפי הוראות המשתמש:
+//   Occupation -> עמודת Month (טקסט "2026-01")
+//   Extras     -> עמודת Month
+//   Expenses   -> עמודת BillingDate
+function ymNorm(v){ if(v==null||v==='')return null; const s=String(v); const m=s.match(/^(\d{4})-(\d{2})/); if(m)return m[1]+'-'+m[2]; return monthKey(v); }
+function occMonth(o){ return ymNorm(o.month) || monthKey(o.checkInDate); }
+function extraMonth(e){ return ymNorm(e.month) || monthKey(e.date); }
+function exMonth(e){ return monthKey(e.billingDate) || ymNorm(e.month) || monthKey(e.invoiceDate); }
+function matchPeriod(k,f){ if(!k) return f.year==='all'&&f.month==='all'; if(f.month!=='all') return k===f.month; if(f.year!=='all') return k.startsWith(f.year); return true; }
+function filterData(d,f){
+  const inCountry = f.country==='all'?null:new Set(d.properties.filter(p=>p.country===f.country).map(p=>p.propertyId));
+  const ok=id=>(f.propertyId==='all'||id===f.propertyId)&&(inCountry===null||inCountry.has(id));
+  return {
+    properties:d.properties.filter(p=>ok(p.propertyId)),
+    platformCommissions:d.platformCommissions.filter(c=>ok(c.propertyId)),
+    rooms:d.rooms.filter(r=>ok(r.propertyId)),
+    occupation:d.occupation.filter(o=>ok(o.propertyId)&&matchPeriod(occMonth(o),f)&&(f.platform==='all'||o.platform===f.platform)),
+    extras:d.extras.filter(e=>ok(e.propertyId)&&matchPeriod(extraMonth(e),f)),
+    maintenance:d.maintenance.filter(m=>ok(m.propertyId)&&matchPeriod(monthKey(m.date),f)),
+    expenses:d.expenses.filter(e=>ok(e.propertyId)&&matchPeriod(exMonth(e),f)),
+    // הוצאות חד-פעמיות — מסוננות בנפרד לחלוטין, לא מתערבבות עם expenses
+    oneTimeExpenses:d.oneTimeExpenses.filter(e=>ok(e.propertyId)&&matchPeriod(exMonth(e),f)),
+  };
+}
+const grossRev=d=>sum(d.occupation.map(o=>o.totalPrice));
+const netRev=d=>sum(d.occupation.map(o=>o.totalNetPrice));
+const commTot=d=>sum(d.occupation.map(o=>o.commission));
+const addIncome=d=>sum(d.extras.map(e=>e.amount));
+const exPaid=d=>sum(d.expenses.map(e=>e.paidAmount));
+const exFull=d=>sum(d.expenses.map(e=>e.fullAmount));
+const exLeft=d=>sum(d.expenses.map(e=>e.leftAmount));
+// הוצאות חד-פעמיות — מאגר נפרד לחלוטין מ-Expenses, לא נכלל בחישובי רווח/הפסד
+const otFull=d=>sum(d.oneTimeExpenses.map(e=>e.fullAmount));
+const otPaid=d=>sum(d.oneTimeExpenses.map(e=>e.paidAmount));
+const otLeft=d=>sum(d.oneTimeExpenses.map(e=>e.leftAmount));
+function otByCategory(d){ const m={}; for(const e of d.oneTimeExpenses){const k=e.expensesType||'ללא קטגוריה';(m[k]=m[k]||{p:0,f:0});m[k].p+=e.paidAmount;m[k].f+=e.fullAmount;} return Object.entries(m).map(([name,v])=>({name,value:v.f,sec:v.p})).sort((a,b)=>b.value-a.value); }
+const maintCost=d=>sum(d.maintenance.map(m=>m.amount));
+const totRev=d=>netRev(d)+addIncome(d);
+// הוצאה כוללת = כל שורות ההוצאה במלואן (FullAmount) — ללא קשר לסטטוס תשלום
+// (שולם / לא שולם / שולם חלקית) — + תחזוקה
+const totExp=d=>exFull(d)+maintCost(d);
+const netProfit=d=>totRev(d)-totExp(d);
+const margin=d=>{const r=totRev(d);return r?netProfit(d)/r:0;};
+const bookings=d=>d.occupation.length;
+const occNights=d=>sum(d.occupation.map(o=>o.nights));
+const avgPerBooking=d=>{const n=bookings(d);return n?grossRev(d)/n:0;};
+const avgPerNight=d=>{const n=occNights(d);return n?grossRev(d)/n:0;};
+function periodDays(d,f){ if(f.month!=='all'){const[y,m]=f.month.split('-').map(Number);return new Date(Date.UTC(y,m,0)).getUTCDate();} if(f.year!=='all')return 365; const ms=new Set(d.occupation.map(occMonth).filter(Boolean)); return Math.max(1,ms.size)*30; }
+const roomCount=d=>d.rooms.length;
+function occupancy(d,f){ const av=roomCount(d)*periodDays(d,f); return av?occNights(d)/av:0; }
+function revByPlatform(d){ const m={}; for(const o of d.occupation){const k=o.platform||'לא ידוע'; (m[k]=m[k]||{g:0,n:0}); m[k].g+=o.totalPrice; m[k].n+=o.totalNetPrice;} return Object.entries(m).map(([name,v])=>({name,value:v.g,sec:v.n})).sort((a,b)=>b.value-a.value); }
+function exByCategory(d){ const m={}; for(const e of d.expenses){const k=e.expensesType||'ללא קטגוריה';(m[k]=m[k]||{p:0,f:0});m[k].p+=e.paidAmount;m[k].f+=e.fullAmount;} const mc=maintCost(d); if(mc>0){m['תחזוקה (דיווחים)']=(m['תחזוקה (דיווחים)']||{p:0,f:0});m['תחזוקה (דיווחים)'].p+=mc;m['תחזוקה (דיווחים)'].f+=mc;} return Object.entries(m).map(([name,v])=>({name,value:v.f,sec:v.p})).sort((a,b)=>b.value-a.value); }
+function propSummaries(d,f){ const fd=filterData(d,f); return fd.properties.map(p=>{ const sub=filterData(d,Object.assign({},f,{propertyId:p.propertyId,country:'all'})); const rev=totRev(sub),pr=netProfit(sub),mg=rev?pr/rev:0; return {propertyId:p.propertyId,propertyName:p.propertyName,country:p.country,revenue:rev,expenses:totExp(sub),netProfit:pr,margin:mg,bookings:bookings(sub),occupancy:occupancy(sub,Object.assign({},f,{propertyId:p.propertyId,country:'all'})),status:pr<=0?'loss':mg<0.05?'balanced':'profit'};}).sort((a,b)=>b.netProfit-a.netProfit); }
+function monthly(d){ const m={}; const en=k=>{m[k]=m[k]||{month:k,revenue:0,expenses:0,profit:0};return m[k];};
+  for(const o of d.occupation){const k=occMonth(o);if(k)en(k).revenue+=o.totalNetPrice;}
+  for(const e of d.extras){const k=extraMonth(e);if(k)en(k).revenue+=e.amount;}
+  for(const e of d.expenses){const k=exMonth(e);if(k)en(k).expenses+=e.fullAmount;}
+  for(const x of d.maintenance){const k=monthKey(x.date);if(k)en(k).expenses+=x.amount;}
+  const a=Object.values(m).sort((x,y)=>x.month.localeCompare(y.month)); a.forEach(p=>p.profit=p.revenue-p.expenses); return a; }
+function monthlyChange(d){ const s=monthly(d); if(s.length<2)return null; const c=s[s.length-1].profit,p=s[s.length-2].profit; return {deltaPct:p===0?0:(c-p)/Math.abs(p)}; }
+function buildPnL(d,pid,f){
+  const sub=filterData(d,Object.assign({},f,{propertyId:pid,country:'all'}));
+  const g={booking:0,airbnb:0,casual:0}; let net=0,comm=0;
+  for(const o of sub.occupation){ g[platGroup(o.platform)]+=o.totalPrice; net+=o.totalNetPrice; comm+=o.commission; }
+  const grossTotal=g.booking+g.airbnb+g.casual; const extra=addIncome(sub); const revenueNet=net+extra;
+  // הוצאות — כל סוג הוצאה כשורה נפרדת (לפי FullAmount, כולל טרם שולם)
+  const exMap={}; for(const e of sub.expenses){ const k=e.expensesType||'(ללא קטגוריה)'; exMap[k]=(exMap[k]||0)+e.fullAmount; }
+  const expenseLines=Object.entries(exMap).map(([type,amount])=>({type,amount})).sort((a,b)=>b.amount-a.amount);
+  const maint=maintCost(sub);
+  const expensesTotal=expenseLines.reduce((a,b)=>a+b.amount,0)+maint;
+  const netProfit=revenueNet-expensesTotal;
+  return {g,grossTotal,comm,net,extra,revenueNet,expenseLines,maint,expensesTotal,netProfit,margin:revenueNet?netProfit/revenueNet:0};
+}
+function anomalies(d,f){ const fd=filterData(d,f); const out=[]; const add=(sev,cat,t,detail)=>out.push({sev,cat,t,detail});
+  for(const s of propSummaries(d,f)){ if(s.netProfit<0) add('high','רווחיות','הנכס '+s.propertyName+' בהפסד','רווח נקי שלילי ('+fmtEUR(s.netProfit)+').'); else if(s.margin<0.05) add('medium','רווחיות','שולי רווח נמוכים — '+s.propertyName,'מתחת ל-5% ('+fmtPct(s.margin)+').'); }
+  const s=monthly(fd); if(s.length>=2){ const avgE=sum(s.map(x=>x.expenses))/s.length, avgR=sum(s.map(x=>x.revenue))/s.length; for(const p of s){ if(avgE>0&&p.expenses>avgE*1.5)add('medium','הוצאות','הוצאות גבוהות מהרגיל ב-'+p.month,fmtEUR(p.expenses)+' — מעל 150% מהממוצע.'); if(avgR>0&&p.revenue<avgR*0.5)add('medium','הכנסות','הכנסות נמוכות מהרגיל ב-'+p.month,fmtEUR(p.revenue)+' — מתחת ל-50% מהממוצע.'); } }
+  const np=fd.occupation.filter(o=>!o.platform).length; if(np)add('low','נתונים חסרים','הזמנות ללא פלטפורמה',np+' הזמנות.');
+  const bo=fd.occupation.filter(o=>o.totalPrice<=0||o.nights<=0).length; if(bo)add('medium','נתונים חסרים','הזמנות ללא מחיר/לילות',bo+' הזמנות לבדיקה.');
+  const nc=fd.expenses.filter(e=>!e.expensesType).length; if(nc)add('low','נתונים חסרים','הוצאות ללא קטגוריה',nc+' שורות.');
+  const up=fd.expenses.filter(e=>e.leftAmount>0); if(up.length)add('medium','תשלומים','הוצאות שטרם שולמו במלואן',up.length+' חשבוניות, יתרה '+fmtEUR(sum(up.map(e=>e.leftAmount)))+'.');
+  const rns=fd.rooms.filter(r=>!r.status).length; if(rns)add('low','נתונים חסרים','חדרים ללא סטטוס',rns+' חדרים.');
+  const order={high:0,medium:1,low:2}; return out.sort((a,b)=>order[a.sev]-order[b.sev]); }
+
+/* ============ State & UI ============ */
+const NAV=[['dashboard','דאשבורד ראשי'],['properties','נכסים'],['pnl','רווח והפסד'],['revenue','הכנסות'],['expenses','הוצאות'],['oneTimeExpenses','הוצאות חד פעמיות'],['occupancy','תפוסה'],['bookings','הזמנות'],['maintenance','תחזוקה'],['anomalies','חריגות בנתונים']];
+const LS='properties_dashboard_dataset_v1';
+let DATA=null, SRC='mock', UPDATED=null, FILE='';
+let FILTERS={propertyId:'all',country:'all',year:'all',month:'all',platform:'all'};
+let ACTIVE='dashboard'; let charts=[];
+
+function setMock(){ DATA=buildMock(); SRC='mock'; UPDATED=new Date(); FILE=''; render(); }
+function setData(d,name){ DATA=d; SRC='upload'; UPDATED=new Date(); FILE=name; try{localStorage.setItem(LS,JSON.stringify({savedAt:UPDATED.getTime(),fileName:name,data:d}));}catch(e){} render(); }
+function clearData(){ try{localStorage.removeItem(LS);}catch(e){} setMock(); }
+function loadFile(file){ statusMsg('טוען את '+file.name+'…','load'); const fr=new FileReader(); fr.onload=e=>{ try{ const d=parseWorkbook(e.target.result); const tot=d.properties.length+d.occupation.length+d.expenses.length+d.rooms.length; if(tot===0) throw new Error('empty'); setData(d,file.name); }catch(err){ statusMsg('שגיאה בקריאת הקובץ. ודא שזה קובץ Excel (.xlsx) במבנה הגיליונות הנכון.','err'); } }; fr.onerror=()=>statusMsg('שגיאה בקריאת הקובץ.','err'); fr.readAsArrayBuffer(file); }
+function statusMsg(msg,kind){ const bar=document.getElementById('statusBar'); const cls=kind==='err'?'bg-rose-50 text-rose-700':kind==='upload'?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'; bar.className='px-5 py-1.5 text-xs '+cls; bar.textContent=msg; }
+
+function chip(){ if(SRC==='upload') return '<span class="inline-flex items-center gap-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-full text-xs font-medium"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> מעודכן מקובץ Excel</span>'; return '<span class="inline-flex items-center gap-2 bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1.5 rounded-full text-xs font-medium">⚗ נתוני דמו — העלה קובץ</span>'; }
+
+function selectHTML(label,id,val,opts){ return '<label class="flex flex-col gap-1 text-xs"><span class="text-slate-500">'+label+'</span><select data-f="'+id+'" class="bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[8rem]">'+opts.map(o=>'<option value="'+esc(o.v)+'"'+(o.v===val?' selected':'')+'>'+esc(o.l)+'</option>').join('')+'</select></label>'; }
+function filterBar(showPlatform){ const d=DATA; const propOpts=[{v:'all',l:'הכול'}].concat(d.properties.map(p=>({v:p.propertyId,l:p.propertyName})));
+  const countries=[...new Set(d.properties.map(p=>p.country).filter(Boolean))]; const cOpts=[{v:'all',l:'הכול'}].concat(countries.map(c=>({v:c,l:T(c)})));
+  const keys=new Set(); d.occupation.forEach(o=>{const k=occMonth(o);if(k)keys.add(k);}); d.extras.forEach(e=>{const k=extraMonth(e);if(k)keys.add(k);}); d.expenses.forEach(e=>{const k=exMonth(e);if(k)keys.add(k);}); d.oneTimeExpenses.forEach(e=>{const k=exMonth(e);if(k)keys.add(k);});
+  const years=[...new Set([...keys].map(k=>k.split('-')[0]))].sort(); const yOpts=[{v:'all',l:'הכול'}].concat(years.map(y=>({v:y,l:y})));
+  const mk=[...keys].sort().filter(k=>FILTERS.year==='all'||k.startsWith(FILTERS.year)); const mOpts=[{v:'all',l:'הכול'}].concat(mk.map(k=>({v:k,l:monthLabel(k)})));
+  const plats=[...new Set(d.occupation.map(o=>o.platform).filter(Boolean))]; const pOpts=[{v:'all',l:'הכול'}].concat(plats.map(p=>({v:p,l:T(p)})));
+  return '<div class="bg-white rounded-2xl border border-slate-200 px-4 py-3 flex flex-wrap items-end gap-3">'+selectHTML('נכס','propertyId',FILTERS.propertyId,propOpts)+selectHTML('מדינה','country',FILTERS.country,cOpts)+selectHTML('שנה','year',FILTERS.year,yOpts)+selectHTML('חודש','month',FILTERS.month,mOpts)+(showPlatform?selectHTML('פלטפורמה','platform',FILTERS.platform,pOpts):'')+'<button data-reset class="text-sm text-slate-500 hover:text-slate-700 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50">איפוס</button></div>'; }
+
+function kpi(label,val,color){ return '<div class="bg-white rounded-2xl border border-slate-200 p-4"><p class="text-slate-500 text-sm">'+label+'</p><p class="text-2xl font-bold mt-1 '+(color||'')+'">'+val+'</p></div>'; }
+function card(title,inner,sub){ return '<div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="mb-2"><h3 class="font-semibold">'+title+'</h3>'+(sub?'<p class="text-slate-400 text-xs">'+sub+'</p>':'')+'</div>'+inner+'</div>'; }
+function table(cols,rows){ return '<div class="overflow-auto rounded-xl border border-slate-200"><table class="w-full text-sm text-right"><thead class="bg-slate-50 text-slate-600"><tr>'+cols.map(c=>'<th class="px-3 py-2.5 whitespace-nowrap">'+c.h+'</th>').join('')+'</tr></thead><tbody>'+(rows.length?rows.map(r=>'<tr class="border-t border-slate-100 hover:bg-slate-50/70">'+cols.map(c=>'<td class="px-3 py-2 whitespace-nowrap">'+c.r(r)+'</td>').join('')+'</tr>').join(''):'<tr><td colspan="'+cols.length+'" class="px-3 py-8 text-center text-slate-400">אין נתונים</td></tr>')+'</tbody></table></div>'; }
+function badge(text,tone){ const m={green:'bg-emerald-100 text-emerald-700',red:'bg-rose-100 text-rose-700',amber:'bg-amber-100 text-amber-700',blue:'bg-blue-100 text-blue-700',slate:'bg-slate-100 text-slate-700'}; return '<span class="px-2.5 py-0.5 rounded-full text-xs '+(m[tone]||m.slate)+'">'+esc(text)+'</span>'; }
+function statusBadge(s){ return s==='profit'?badge('רווחי','green'):s==='balanced'?badge('מאוזן','amber'):badge('בהפסד','red'); }
+const profitColor=n=>n>=0?'text-emerald-600':'text-rose-600';
+
+function pageDashboard(d){
+  const sums=propSummaries(DATA,FILTERS); const best=sums[0],worst=sums[sums.length-1]; const ch=monthlyChange(d);
+  let h=titleBlock('דאשבורד ראשי','תמונת מצב כוללת של כל הנכסים')+filterBar(true);
+  const grossTotal=grossRev(d)+addIncome(d), netTotal=totRev(d);
+  h+='<div class="grid grid-cols-2 md:grid-cols-4 gap-3">'+
+    kpi('סך הכנסות (ברוטו)',fmtEUR(grossTotal),'text-emerald-600')+kpi('סך הכנסות (נטו)',fmtEUR(netTotal),'text-emerald-600')+
+    kpi('סך הוצאות',fmtEUR(totExp(d)),'text-rose-600')+kpi('רווח / הפסד נקי',fmtEUR(netProfit(d)),profitColor(netProfit(d)))+
+    kpi('שולי רווח',fmtPct(margin(d)))+kpi('תפוסה ממוצעת',fmtPct(occupancy(d,FILTERS)))+
+    kpi('מספר הזמנות',fmtNum(bookings(d)))+kpi('הכנסה ממוצעת להזמנה',fmtEUR(avgPerBooking(d)))+
+    kpi('הכנסה ממוצעת ללילה',fmtEUR(avgPerNight(d)))+'</div>';
+  h+='<div class="grid md:grid-cols-2 gap-3">'+
+    '<div class="bg-emerald-50 border border-emerald-100 rounded-2xl p-4"><p class="text-emerald-700 text-sm">הנכס הרווחי ביותר</p><p class="font-bold">'+(best?esc(best.propertyName):'—')+'</p>'+(best?'<p class="text-xs text-emerald-700">רווח נקי '+fmtEUR(best.netProfit)+' · שוליים '+fmtPct(best.margin)+'</p>':'')+'</div>'+
+    '<div class="bg-rose-50 border border-rose-100 rounded-2xl p-4"><p class="text-rose-700 text-sm">נכס בביצוע חלש / הפסד</p><p class="font-bold">'+(worst?esc(worst.propertyName):'—')+'</p>'+(worst?'<p class="text-xs text-rose-700">רווח נקי '+fmtEUR(worst.netProfit)+' · שוליים '+fmtPct(worst.margin)+'</p>':'')+'</div></div>';
+  h+='<div class="grid xl:grid-cols-2 gap-4">'+
+    card('הכנסות מול הוצאות לפי חודש','<div class="relative h-72"><canvas id="c1"></canvas></div>')+
+    card('רווח / הפסד לפי נכס','<div class="relative h-72"><canvas id="c2"></canvas></div>')+
+    card('התפלגות הכנסות לפי פלטפורמה','<div class="relative h-72"><canvas id="c3"></canvas></div>','לפי ברוטו')+
+    card('התפלגות הוצאות לפי קטגוריה','<div class="relative h-72"><canvas id="c4"></canvas></div>','לפי הסכום המלא (כולל טרם שולם)')+'</div>';
+  const cols=[{h:'נכס',r:s=>'<span class="font-medium">'+esc(s.propertyName)+'</span>'},{h:'מדינה',r:s=>esc(T(s.country))},{h:'הכנסות',r:s=>fmtEUR(s.revenue)},{h:'הוצאות',r:s=>fmtEUR(s.expenses)},{h:'רווח נקי',r:s=>'<span class="font-semibold '+profitColor(s.netProfit)+'">'+fmtEUR(s.netProfit)+'</span>'},{h:'שוליים',r:s=>fmtPct(s.margin)},{h:'תפוסה',r:s=>fmtPct(s.occupancy)},{h:'הזמנות',r:s=>fmtNum(s.bookings)},{h:'סטטוס',r:s=>statusBadge(s.status)}];
+  h+=card('סיכום כל הנכסים',table(cols,sums));
+  return {html:h, charts:()=>{
+    const ms=monthly(d), labels=ms.map(p=>monthLabel(p.month));
+    mkChart('c1',{data:{labels,datasets:[{type:'bar',label:'הכנסות',data:ms.map(p=>p.revenue),backgroundColor:'#10b981',borderRadius:4},{type:'bar',label:'הוצאות',data:ms.map(p=>p.expenses),backgroundColor:'#ef4444',borderRadius:4},{type:'line',label:'רווח נקי',data:ms.map(p=>p.profit),borderColor:'#3563eb',backgroundColor:'#3563eb',borderWidth:2,tension:.3}]},options:baseOpt()});
+    mkChart('c2',{type:'bar',data:{labels:sums.map(s=>s.propertyName),datasets:[{label:'רווח נקי',data:sums.map(s=>Math.round(s.netProfit)),backgroundColor:sums.map(s=>s.netProfit>=0?'#10b981':'#ef4444'),borderRadius:4}]},options:baseOpt(true)});
+    const rp=revByPlatform(d); mkChart('c3',{type:'doughnut',data:{labels:rp.map(x=>T(x.name)),datasets:[{data:rp.map(x=>Math.round(x.value)),backgroundColor:PIE,borderWidth:0}]},options:pieOpt()});
+    const ec=exByCategory(d); mkChart('c4',{type:'doughnut',data:{labels:ec.map(x=>T(x.name)),datasets:[{data:ec.map(x=>Math.round(x.value)),backgroundColor:PIE,borderWidth:0}]},options:pieOpt()});
+  }};
+}
+const PIE=['#3563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#a855f7','#64748b'];
+function baseOpt(noLegend){ return {responsive:true,maintainAspectRatio:false,plugins:{legend:{display:!noLegend,position:'top',labels:{font:{family:'Rubik'}}}},scales:{y:{ticks:{callback:v=>'€'+Math.round(v/1000)+'k'}}}}; }
+function pieOpt(){ return {responsive:true,maintainAspectRatio:false,cutout:'58%',plugins:{
+  legend:{position:'bottom',labels:{font:{family:'Rubik'},boxWidth:12,
+    generateLabels(chart){
+      const data=chart.data; if(!data.labels.length||!data.datasets.length) return [];
+      const ds=data.datasets[0]; const total=ds.data.reduce((a,b)=>a+b,0);
+      return data.labels.map((label,i)=>{ const value=ds.data[i]; const pct= total? (value/total*100).toFixed(1):'0';
+        return { text:label+' ('+pct+'%)', fillStyle:ds.backgroundColor[i], strokeStyle:ds.backgroundColor[i], index:i };
+      });
+    }
+  }},
+  tooltip:{callbacks:{label(ctx){ const ds=ctx.dataset; const total=ds.data.reduce((a,b)=>a+b,0); const val=ctx.parsed; const pct= total? (val/total*100).toFixed(1):'0'; return ctx.label+': €'+Math.round(val).toLocaleString('he-IL')+' ('+pct+'%)'; }}}
+}}; }
+function mkChart(id,cfg){ const el=document.getElementById(id); if(!el)return; charts.push(new Chart(el,cfg)); }
+
+function pageProperties(d){
+  const sums=propSummaries(DATA,FILTERS);
+  let h=titleBlock('נכסים','פירוט הנכסים, החדרים ועמלות הפלטפורמות')+filterBar(false);
+  h+='<div class="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">'+sums.map(s=>'<div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="flex items-center justify-between"><h3 class="font-bold">'+esc(s.propertyName)+'</h3>'+statusBadge(s.status)+'</div><p class="text-slate-400 text-xs mb-3">'+esc(T(s.country))+' · '+esc(s.propertyId)+'</p><div class="space-y-1.5 text-sm">'+row('הכנסות',fmtEUR(s.revenue))+row('הוצאות',fmtEUR(s.expenses))+row('רווח נקי','<span class="font-bold '+profitColor(s.netProfit)+'">'+fmtEUR(s.netProfit)+'</span>')+row('שוליים',fmtPct(s.margin))+row('תפוסה',fmtPct(s.occupancy))+row('הזמנות',fmtNum(s.bookings))+'</div></div>').join('')+'</div>';
+  const rcols=[{h:'נכס',r:r=>esc(r.propertyId)},{h:"מס' חדר",r:r=>r.roomNumber},{h:'סוג',r:r=>esc(T(r.roomType))},{h:"תפוסה מקס'",r:r=>r.maxGuests},{h:'סטטוס',r:r=>badge(T(r.status)||'—',/^available/i.test(r.status)?'green':'amber')},{h:'הערות',r:r=>'<span class="text-slate-400">'+esc(r.notes||'—')+'</span>'}];
+  const rrooms=DATA.rooms.filter(r=>FILTERS.propertyId==='all'||r.propertyId===FILTERS.propertyId);
+  h+=card('חדרים / יחידות אירוח',table(rcols,rrooms));
+  const ccols=[{h:'נכס',r:c=>esc(c.propertyId)},{h:'פלטפורמה',r:c=>esc(c.platform)},{h:'אחוז עמלה',r:c=>fmtPct(c.commissionPct)}];
+  const rc=DATA.platformCommissions.filter(c=>FILTERS.propertyId==='all'||c.propertyId===FILTERS.propertyId);
+  h+=card('טבלת עמלות לפי פלטפורמה',table(ccols,rc),'מתוך גיליון Properties (טבלה שנייה)');
+  return {html:h};
+}
+function row(l,v){ return '<div class="flex items-center justify-between"><span class="text-slate-400">'+l+'</span><span>'+v+'</span></div>'; }
+
+function pagePnL(d){
+  const props=filterData(DATA,FILTERS).properties; const pnls=props.map(p=>({p,b:buildPnL(DATA,p.propertyId,FILTERS)}));
+  let h=titleBlock('רווח והפסד (P&L)','מחושב ישירות מגיליונות המקור · כל סוג הוצאה כשורה נפרדת')+filterBar(false);
+  h+='<div class="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">'+pnls.map(({p,b})=>{const st=b.netProfit<=0?'loss':b.margin<0.05?'balanced':'profit';return '<div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="flex items-center justify-between"><h3 class="font-bold text-sm">'+esc(p.propertyName)+'</h3>'+statusBadge(st)+'</div><p class="text-2xl font-bold mt-2 '+profitColor(b.netProfit)+'">'+fmtEUR(b.netProfit)+'</p><p class="text-xs text-slate-400">שולי רווח '+fmtPct(b.margin)+'</p></div>';}).join('')+'</div>';
+  const allTypes=[...new Set(pnls.flatMap(x=>x.b.expenseLines.map(l=>l.type)))];
+  const getT=(b,type)=>{ const l=b.expenseLines.find(x=>x.type===type); return l?l.amount:0; };
+  const incomeRows=[
+    ['הכנסה ברוטו — בוקינג', b=>b.g.booking, 0],
+    ['הכנסה ברוטו — Airbnb', b=>b.g.airbnb, 0],
+    ['הכנסה ברוטו — לקוח מזדמן', b=>b.g.casual, 0],
+    ['סך הכנסות ברוטו', b=>b.grossTotal, 1],
+    ['עמלות פלטפורמה (ברוטו−נטו)', b=>b.comm, 0],
+    ['סך הכנסות נטו', b=>b.net, 1],
+    ['הכנסות נוספות (Extras)', b=>b.extra, 0],
+    ['סך כל ההכנסות (נטו)', b=>b.revenueNet, 1],
+  ];
+  const colCount=pnls.length+2;
+  const lineHTML=(label,fn,isT)=>{ const tot=pnls.reduce((a,x)=>a+fn(x.b),0); return '<tr class="border-t border-slate-100 '+(isT?'bg-slate-50/80 font-semibold':'')+'"><td class="px-3 py-2">'+label+'</td>'+pnls.map(x=>'<td class="px-3 py-2">'+fmtEUR(fn(x.b))+'</td>').join('')+'<td class="px-3 py-2 font-medium">'+fmtEUR(tot)+'</td></tr>'; };
+  let t='<div class="overflow-auto rounded-xl border border-slate-200"><table class="w-full text-sm text-right"><thead class="bg-slate-50 text-slate-600"><tr><th class="px-3 py-2.5">סעיף</th>'+pnls.map(x=>'<th class="px-3 py-2.5 whitespace-nowrap">'+esc(x.p.propertyName)+'</th>').join('')+'<th class="px-3 py-2.5">סה"כ</th></tr></thead><tbody>';
+  for(const [label,fn,isT] of incomeRows) t+=lineHTML(label,fn,isT);
+  t+='<tr class="border-t border-slate-200"><td class="px-3 py-2 font-semibold text-slate-700" colspan="'+colCount+'">הוצאות (כל סוג בנפרד)</td></tr>';
+  for(const type of allTypes) t+=lineHTML(esc(T(type)), b=>getT(b,type), 0);
+  t+=lineHTML('תחזוקה (גיליון Maintence)', b=>b.maint, 0);
+  t+=lineHTML('סך כל ההוצאות', b=>b.expensesTotal, 1);
+  const totNP=pnls.reduce((a,x)=>a+x.b.netProfit,0);
+  t+='<tr class="border-t border-slate-200 bg-slate-50/80 font-bold"><td class="px-3 py-2">רווח / הפסד נקי</td>'+pnls.map(x=>'<td class="px-3 py-2 '+profitColor(x.b.netProfit)+'">'+fmtEUR(x.b.netProfit)+'</td>').join('')+'<td class="px-3 py-2 '+profitColor(totNP)+'">'+fmtEUR(totNP)+'</td></tr>';
+  t+='</tbody></table></div>';
+  h+=card('דוח רווח והפסד מפורט',t,'שורות = סעיפים · עמודות = נכסים');
+  return {html:h};
+}
+
+function pageRevenue(d){
+  let h=titleBlock('הכנסות','לפי נכס, חודש, פלטפורמה וסוג הכנסה')+filterBar(true);
+  h+='<div class="grid grid-cols-2 xl:grid-cols-4 gap-3">'+kpi('הכנסה ברוטו',fmtEUR(grossRev(d)),'text-emerald-600')+kpi('הכנסה נטו',fmtEUR(netRev(d)))+kpi('סך עמלות',fmtEUR(commTot(d)),'text-amber-600')+kpi('הכנסות נוספות',fmtEUR(addIncome(d)))+'</div>';
+  h+='<div class="grid xl:grid-cols-2 gap-4">'+card('הכנסות לפי חודש','<div class="relative h-72"><canvas id="r1"></canvas></div>')+card('הכנסות לפי פלטפורמה','<div class="relative h-72"><canvas id="r2"></canvas></div>')+'</div>';
+  const byP={}; d.occupation.forEach(o=>byP[o.propertyId]=(byP[o.propertyId]||0)+o.totalNetPrice);
+  const pr=DATA.properties.filter(p=>byP[p.propertyId]!=null).map(p=>({name:p.propertyName,v:byP[p.propertyId]||0})).sort((a,b)=>b.v-a.v);
+  const exT={}; d.extras.forEach(e=>exT[e.incomeType||'אחר']=(exT[e.incomeType||'אחר']||0)+e.amount);
+  const exA=Object.entries(exT).map(([name,v])=>({name,v})).sort((a,b)=>b.v-a.v);
+  h+='<div class="grid xl:grid-cols-2 gap-4">'+card('הכנסות נטו לפי נכס',table([{h:'נכס',r:x=>esc(x.name)},{h:'הכנסה נטו',r:x=>fmtEUR(x.v)}],pr))+card('הכנסות נוספות לפי סוג',table([{h:'סוג',r:x=>esc(T(x.name))},{h:'סכום',r:x=>fmtEUR(x.v)}],exA))+'</div>';
+  return {html:h, charts:()=>{ const ms=monthly(d); mkChart('r1',{data:{labels:ms.map(p=>monthLabel(p.month)),datasets:[{type:'bar',label:'הכנסות',data:ms.map(p=>p.revenue),backgroundColor:'#10b981',borderRadius:4}]},options:baseOpt(true)}); const rp=revByPlatform(d); mkChart('r2',{type:'doughnut',data:{labels:rp.map(x=>T(x.name)),datasets:[{data:rp.map(x=>Math.round(x.value)),backgroundColor:PIE,borderWidth:0}]},options:pieOpt()}); }};
+}
+
+function pageExpenses(d){
+  let h=titleBlock('הוצאות','חשבוניות, תשלומים ויתרות לתשלום')+filterBar(false);
+  h+='<div class="grid grid-cols-2 xl:grid-cols-4 gap-3">'+kpi('סך חשבוניות',fmtEUR(exFull(d)))+kpi('שולם בפועל',fmtEUR(exPaid(d)),'text-emerald-600')+kpi('נותר לתשלום',fmtEUR(exLeft(d)),'text-rose-600')+kpi('עלות תחזוקה',fmtEUR(maintCost(d)),'text-amber-600')+'</div>';
+  h+=card('הוצאות לפי קטגוריה','<div class="relative h-72"><canvas id="e1"></canvas></div>','לפי הסכום המלא (כולל טרם שולם)');
+  const payBadge=s=>{const x=String(s||'').toLowerCase();let tone='slate';
+    if(x.includes('partly')||x.includes('חלקית'))tone='amber';
+    else if(x.includes('not paid')||x.includes('not')||x==='לא שולם')tone='red';
+    else if(x.includes('paid')||x.includes('שולם'))tone='green';
+    return badge(T(s)||'—',tone);};
+  const cols=[{h:'נכס',r:e=>esc(e.propertyId)},{h:'קטגוריה',r:e=>e.expensesType?esc(T(e.expensesType)):'<span class="text-rose-500">ללא קטגוריה</span>'},{h:'תאריך',r:e=>fmtDate(e.invoiceDate)},{h:'סכום מלא',r:e=>fmtEUR(e.fullAmount)},{h:'שולם',r:e=>fmtEUR(e.paidAmount)},{h:'נותר',r:e=>'<span class="'+(e.leftAmount>0?'text-rose-600 font-medium':'text-slate-500')+'">'+fmtEUR(e.leftAmount)+'</span>'},{h:'סטטוס',r:e=>payBadge(e.status)},{h:'תשלום',r:e=>esc(T(e.paidBy))},{h:'דווח ע"י',r:e=>esc(e.reportBy)},{h:'הערות',r:e=>'<span class="text-slate-400">'+esc(e.notes||'—')+'</span>'}];
+  h+=card('פירוט הוצאות',table(cols,d.expenses));
+  return {html:h, charts:()=>{ const ec=exByCategory(d); mkChart('e1',{type:'doughnut',data:{labels:ec.map(x=>T(x.name)),datasets:[{data:ec.map(x=>Math.round(x.value)),backgroundColor:PIE,borderWidth:0}]},options:pieOpt()}); }};
+}
+
+function pageOneTimeExpenses(d){
+  let h=titleBlock('הוצאות חד פעמיות','חשבוניות, תשלומים ויתרות לתשלום — מגיליון נפרד מ"הוצאות", אינו נכלל בחישובי רווח והפסד הרגילים')+filterBar(false);
+  h+='<div class="grid grid-cols-2 xl:grid-cols-4 gap-3">'+kpi('סך חשבוניות',fmtEUR(otFull(d)))+kpi('שולם בפועל',fmtEUR(otPaid(d)),'text-emerald-600')+kpi('נותר לתשלום',fmtEUR(otLeft(d)),'text-rose-600')+kpi('מספר הוצאות',fmtNum(d.oneTimeExpenses.length),'text-amber-600')+'</div>';
+  h+=card('הוצאות חד-פעמיות לפי קטגוריה','<div class="relative h-72"><canvas id="ot1"></canvas></div>','לפי הסכום המלא (כולל טרם שולם)');
+  const payBadge=s=>{const x=String(s||'').toLowerCase();let tone='slate';
+    if(x.includes('partly')||x.includes('חלקית'))tone='amber';
+    else if(x.includes('not paid')||x.includes('not')||x==='לא שולם')tone='red';
+    else if(x.includes('paid')||x.includes('שולם'))tone='green';
+    return badge(T(s)||'—',tone);};
+  const cols=[{h:'נכס',r:e=>esc(e.propertyId)},{h:'קטגוריה',r:e=>e.expensesType?esc(T(e.expensesType)):'<span class="text-rose-500">ללא קטגוריה</span>'},{h:'תאריך',r:e=>fmtDate(e.invoiceDate)},{h:'סכום מלא',r:e=>fmtEUR(e.fullAmount)},{h:'שולם',r:e=>fmtEUR(e.paidAmount)},{h:'נותר',r:e=>'<span class="'+(e.leftAmount>0?'text-rose-600 font-medium':'text-slate-500')+'">'+fmtEUR(e.leftAmount)+'</span>'},{h:'סטטוס',r:e=>payBadge(e.status)},{h:'תשלום',r:e=>esc(T(e.paidBy))},{h:'דווח ע"י',r:e=>esc(e.reportBy)},{h:'הערות',r:e=>'<span class="text-slate-400">'+esc(e.notes||'—')+'</span>'}];
+  h+=card('פירוט הוצאות חד-פעמיות',table(cols,d.oneTimeExpenses));
+  return {html:h, charts:()=>{ const ec=otByCategory(d); mkChart('ot1',{type:'doughnut',data:{labels:ec.map(x=>T(x.name)),datasets:[{data:ec.map(x=>Math.round(x.value)),backgroundColor:PIE,borderWidth:0}]},options:pieOpt()}); }};
+}
+
+function pageOccupancy(d){
+  let h=titleBlock('תפוסה','הערכת תפוסה לפי נכס, חודש וחדר')+filterBar(false);
+  h+='<div class="grid grid-cols-2 xl:grid-cols-4 gap-3">'+kpi('תפוסה ממוצעת',fmtPct(occupancy(d,FILTERS)))+kpi('לילות תפוסים',fmtNum(occNights(d)),'text-emerald-600')+kpi('לילות זמינים',fmtNum(roomCount(d)*periodDays(d,FILTERS)))+kpi('מספר חדרים',fmtNum(roomCount(d)))+'</div>';
+  const rowsP=filterData(DATA,FILTERS).properties.map(p=>{const sub=filterData(DATA,Object.assign({},FILTERS,{propertyId:p.propertyId,country:'all'}));const rc=roomCount(sub),occ=occNights(sub),av=rc*periodDays(sub,Object.assign({},FILTERS,{propertyId:p.propertyId,country:'all'}));return {name:p.propertyName,rooms:rc,occ,av,rate:av?occ/av:0};});
+  const pcols=[{h:'נכס',r:x=>esc(x.name)},{h:"מס' חדרים",r:x=>fmtNum(x.rooms)},{h:'לילות תפוסים',r:x=>fmtNum(x.occ)},{h:'לילות זמינים',r:x=>fmtNum(x.av)},{h:'אחוז תפוסה',r:x=>'<div class="flex items-center gap-2"><div class="w-20 h-2 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-blue-500" style="width:'+Math.min(100,x.rate*100)+'%"></div></div><span>'+fmtPct(x.rate)+'</span></div>'}];
+  h+=card('תפוסה לפי נכס',table(pcols,rowsP));
+  const byR={}; d.occupation.forEach(o=>byR[o.roomNumber]=(byR[o.roomNumber]||0)+o.nights);
+  const rrows=Object.entries(byR).map(([room,n])=>({room,n})).sort((a,b)=>b.n-a.n);
+  h+=card('תפוסה לפי חדר',table([{h:"מס' חדר",r:x=>x.room},{h:'לילות תפוסים',r:x=>fmtNum(x.n)}],rrows),FILTERS.propertyId==='all'?'מומלץ לבחור נכס בפילטר':'');
+  h+='<p class="text-xs text-slate-400">* אחוז התפוסה הוא הערכה: לילות תפוסים חלקי (מספר חדרים × ימים בתקופה).</p>';
+  return {html:h};
+}
+
+function pageBookings(d){
+  let h=titleBlock('הזמנות','כל ההזמנות מתוך גיליון occupation')+filterBar(true);
+  h+='<div class="grid grid-cols-2 xl:grid-cols-4 gap-3">'+kpi('מספר הזמנות',fmtNum(bookings(d)),'text-blue-700')+kpi('סך לילות',fmtNum(occNights(d)))+kpi('סך אורחים',fmtNum(sum(d.occupation.map(o=>o.numberOfGuests))))+kpi('הכנסה ברוטו',fmtEUR(grossRev(d)),'text-emerald-600')+'</div>';
+  const rows=d.occupation.slice().sort((a,b)=>(b.checkInDate||'').localeCompare(a.checkInDate||''));
+  const cols=[{h:'נכס',r:o=>esc(o.propertyId)},{h:'חדר',r:o=>o.roomNumber},{h:'אורח',r:o=>esc(o.guestName)},{h:'כניסה',r:o=>fmtDate(o.checkInDate)},{h:'יציאה',r:o=>fmtDate(o.checkOutDate)},{h:'לילות',r:o=>o.nights},{h:'אורחים',r:o=>o.numberOfGuests},{h:'פלטפורמה',r:o=>o.platform?badge(T(o.platform),'blue'):'<span class="text-rose-500">חסר</span>'},{h:'ברוטו',r:o=>fmtEUR(o.totalPrice)},{h:'עמלה',r:o=>fmtEUR(o.commission)},{h:'נטו',r:o=>fmtEUR(o.totalNetPrice)},{h:'סטטוס',r:o=>badge(T(o.status)||'—','slate')}];
+  h+=card('רשימת הזמנות',table(cols,rows));
+  return {html:h};
+}
+
+function pageMaintenance(d){
+  let h=titleBlock('תחזוקה ותקלות','דיווחי תקלות ועלויות תיקון (גיליון Maintence)')+filterBar(false);
+  const needRepair=d.maintenance.filter(m=>/repair/i.test(m.status||'')).length;
+  const notAvail=d.maintenance.filter(m=>/not available/i.test(m.status||'')).length;
+  h+='<div class="grid grid-cols-2 xl:grid-cols-4 gap-3">'+kpi('סך דיווחים',fmtNum(d.maintenance.length),'text-blue-700')+kpi('דרוש תיקון',fmtNum(needRepair),'text-rose-600')+kpi('לא זמין',fmtNum(notAvail),'text-amber-600')+kpi('עלות כוללת',fmtEUR(maintCost(d)),'text-amber-600')+'</div>';
+  const tone=s=>{const x=String(s||'').toLowerCase(); if(x.includes('repair')||x.includes('תיקון'))return 'amber'; if(x.includes('not available')||x.includes('לא זמין'))return 'red'; if(x.includes('available')||x.includes('זמין'))return 'green'; return 'slate';};
+  const rows=d.maintenance.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const cols=[{h:'נכס',r:m=>esc(m.propertyId)},{h:'חדר',r:m=>m.roomNumber==null?'—':m.roomNumber},{h:'תאריך',r:m=>fmtDate(m.date)},{h:'דווח ע"י',r:m=>esc(m.reportBy)},{h:'אחראי',r:m=>esc(m.supervisor||'—')},{h:'עלות',r:m=>fmtEUR(m.amount)},{h:'סטטוס',r:m=>badge(T(m.status)||'—',tone(m.status))}];
+  h+=card('דיווחי תחזוקה',table(cols,rows));
+  return {html:h};
+}
+
+function pageAnomalies(d){
+  const list=anomalies(DATA,FILTERS);
+  let h=titleBlock('חריגות ובעיות בנתונים','המערכת רק מציגה התראות — היא לעולם לא מתקנת או משלימה נתונים')+filterBar(true);
+  const c={high:list.filter(a=>a.sev==='high').length,medium:list.filter(a=>a.sev==='medium').length,low:list.filter(a=>a.sev==='low').length};
+  h+='<div class="grid grid-cols-3 gap-3">'+kpi('התראות חמורות',c.high,'text-rose-600')+kpi('התראות בינוניות',c.medium,'text-amber-600')+kpi('התראות קלות',c.low)+'</div>';
+  if(!list.length){ h+=card('','<div class="py-10 text-center text-slate-500">✓ לא נמצאו חריגות בנתונים המסוננים</div>'); }
+  else { const meta={high:'bg-rose-50 border-rose-200 text-rose-700',medium:'bg-amber-50 border-amber-200 text-amber-700',low:'bg-slate-50 border-slate-200 text-slate-600'};
+    h+='<div class="space-y-2.5">'+list.map(a=>'<div class="border rounded-xl px-4 py-3 '+meta[a.sev]+'"><div class="flex items-center gap-2 flex-wrap"><span class="font-semibold text-slate-800">'+esc(a.t)+'</span><span class="text-xs px-2 py-0.5 rounded-full bg-white/70 border border-slate-200">'+esc(a.cat)+'</span></div><p class="text-sm text-slate-600 mt-0.5">'+esc(a.detail)+'</p></div>').join('')+'</div>'; }
+  return {html:h};
+}
+
+function titleBlock(t,s){ return '<div><h2 class="text-xl font-bold">'+t+'</h2><p class="text-slate-400 text-sm">'+s+'</p></div>'; }
+
+const PAGES={dashboard:pageDashboard,properties:pageProperties,pnl:pagePnL,revenue:pageRevenue,expenses:pageExpenses,oneTimeExpenses:pageOneTimeExpenses,occupancy:pageOccupancy,bookings:pageBookings,maintenance:pageMaintenance,anomalies:pageAnomalies};
+
+function render(){
+  charts.forEach(c=>{try{c.destroy();}catch(e){}}); charts=[];
+  // sidebar
+  document.getElementById('sidebar').innerHTML = NAV.map(([k,l])=>'<button data-nav="'+k+'" class="navbtn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium '+(k===ACTIVE?'active':'text-slate-600 hover:bg-slate-100')+'">'+l+'</button>').join('');
+  document.querySelector('#hnav > div').innerHTML = NAV.map(([k,l])=>'<button data-nav="'+k+'" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap '+(k===ACTIVE?'bg-blue-700 text-white':'text-slate-600 hover:bg-slate-100')+'">'+l+'</button>').join('');
+  document.getElementById('sideStatus').className='text-xs rounded-lg px-3 py-2 '+(SRC==='mock'?'bg-amber-50 text-amber-700':'bg-emerald-50 text-emerald-700');
+  document.getElementById('sideStatus').textContent = SRC==='mock'?'⚠️ נתוני דמו פעילים':'✓ נתונים מקובץ';
+  // header status
+  document.getElementById('connBadge').innerHTML = chip();
+  document.getElementById('updatedAt').textContent = 'עודכן: '+fmtDateTime(UPDATED);
+  if(SRC==='mock'){ statusMsg('מוצגים נתוני דמו — העלה קובץ Excel כדי לראות את הנתונים האמיתיים.','mock'); document.getElementById('demoBtn').textContent='נתוני דמו'; }
+  else { statusMsg('הנתונים עודכנו מהקובץ: '+FILE,'upload'); document.getElementById('demoBtn').textContent='נקה / דמו'; }
+  document.getElementById('dropzone').classList.toggle('hidden', SRC!=='mock');
+  // page
+  const fd=filterData(DATA,FILTERS);
+  const res=PAGES[ACTIVE](fd);
+  document.getElementById('page').innerHTML=res.html;
+  // wire filters
+  document.querySelectorAll('#page select[data-f]').forEach(sel=>sel.addEventListener('change',e=>{ const f=e.target.getAttribute('data-f'); FILTERS[f]=e.target.value; if(f==='year')FILTERS.month='all'; render(); }));
+  const rst=document.querySelector('#page [data-reset]'); if(rst)rst.addEventListener('click',()=>{ FILTERS={propertyId:'all',country:'all',year:'all',month:'all',platform:'all'}; render(); });
+  // wire nav
+  document.querySelectorAll('[data-nav]').forEach(b=>b.addEventListener('click',()=>{ ACTIVE=b.getAttribute('data-nav'); render(); }));
+  if(res.charts) setTimeout(res.charts,30);
+}
+
+/* ============ wiring ============ */
+const fi=document.getElementById('fileInput');
+document.getElementById('uploadBtn').addEventListener('click',()=>fi.click());
+document.getElementById('demoBtn').addEventListener('click',()=>{ if(SRC==='upload') clearData(); else setMock(); });
+fi.addEventListener('change',e=>{ const f=e.target.files&&e.target.files[0]; if(f)loadFile(f); e.target.value=''; });
+const dz=document.getElementById('dropzone');
+dz.addEventListener('click',()=>fi.click());
+['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('border-blue-500','bg-blue-50');}));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('border-blue-500','bg-blue-50');}));
+dz.addEventListener('drop',e=>{ const f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f)loadFile(f); });
+
+// init — load saved file if exists, else demo
+(function init(){
+  try{ const s=localStorage.getItem(LS); if(s){ const env=JSON.parse(s); if(env&&env.data&&env.data.properties){ DATA=env.data; SRC='upload'; UPDATED=new Date(env.savedAt); FILE=env.fileName||'קובץ שמור'; render(); return; } } }catch(e){}
+  setMock();
+})();
+</script>
+</body>
+</html>
