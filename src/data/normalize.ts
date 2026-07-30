@@ -186,6 +186,8 @@ export function normalizeExtras(rows: RawRow[]): Extra[] {
         incomeType: toStr(pick(i, "IncomeType", "Income Type")),
         amount: toNum(pick(i, "Amount")),
         paidBy: toStr(pick(i, "PaidBy", "Paid By")),
+        // עמודת Month — קובעת את שיוך החודש (עדיפות על פני Date)
+        month: toISODate(pick(i, "Month")) ?? (toStr(pick(i, "Month")) || null),
       };
     })
     .filter((e) => e.propertyId !== "");

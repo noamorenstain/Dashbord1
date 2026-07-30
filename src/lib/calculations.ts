@@ -34,21 +34,29 @@ export const defaultFilters: Filters = {
   platform: "all",
 };
 
-/** מפתח חודש לכל סוג רשומה */
-function occMonth(o: Occupation): string | null {
+/**
+ * מפתח חודש לכל סוג רשומה — מקור אמת יחיד. כל מקום במערכת (פילטרים, KPI,
+ * גרפים, טבלאות, P&L) חייב לקרוא לפונקציות האלה ולא לשכפל את הלוגיקה.
+ *
+ *   הזמנות (occupation)      -> Check-in Date בלבד (לא Check-out, לא Month)
+ *   הכנסות נוספות (Extras)   -> עמודת Month (לא Date)
+ *   הוצאות (Expenses + One-time expenses) -> BillingDate (עמודה I), לא InvoiceDate/PaymentDate
+ *   תחזוקה (Maintence)       -> Date
+ */
+export function occMonth(o: Occupation): string | null {
   return monthKey(o.checkInDate);
 }
-function extraMonth(e: Extra): string | null {
-  return monthKey(e.date);
+export function extraMonth(e: Extra): string | null {
+  return monthKey(e.month) ?? monthKey(e.date);
 }
-function expenseMonth(e: Expense): string | null {
-  return monthKey(e.invoiceDate) ?? monthKey(e.month) ?? monthKey(e.billingDate);
+export function expenseMonth(e: Expense): string | null {
+  return monthKey(e.billingDate) ?? monthKey(e.month) ?? monthKey(e.invoiceDate);
 }
-// הוצאות חד-פעמיות — אותה לוגיקת תאריך, נשמר כפונקציה נפרדת כי מדובר במאגר נפרד
-function oneTimeExpenseMonth(e: Expense): string | null {
-  return monthKey(e.invoiceDate) ?? monthKey(e.month) ?? monthKey(e.billingDate);
+// הוצאות חד-פעמיות — אותה לוגיקת תאריך (BillingDate קודם), נשמר כפונקציה נפרדת כי מדובר במאגר נפרד
+export function oneTimeExpenseMonth(e: Expense): string | null {
+  return monthKey(e.billingDate) ?? monthKey(e.month) ?? monthKey(e.invoiceDate);
 }
-function maintMonth(m: Maintenance): string | null {
+export function maintMonth(m: Maintenance): string | null {
   return monthKey(m.date);
 }
 

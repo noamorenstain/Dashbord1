@@ -8,7 +8,8 @@ import { RotateCcw } from "lucide-react";
 import { useData } from "../data/DataContext";
 import { useFilters } from "../context/FilterContext";
 import { Option, Select } from "./ui/Select";
-import { monthKey, monthLabel } from "../lib/format";
+import { monthLabel } from "../lib/format";
+import { occMonth, expenseMonth, oneTimeExpenseMonth, extraMonth } from "../lib/calculations";
 
 const ALL: Option = { value: "all", label: "הכול" };
 
@@ -31,24 +32,30 @@ export function FilterBar({ showPlatform = true }: { showPlatform?: boolean }) {
     return [ALL, ...set.map((p) => ({ value: p, label: p }))];
   }, [data.occupation]);
 
+  // כל חילוץ מפתח-חודש עובר דרך אותן פונקציות בדיוק כמו filterDataSet/החישובים —
+  // כדי שהפילטר, הטבלאות והגרפים תמיד יסכימו על אותו שיוך חודש (Check-in / Month / BillingDate).
   const { years, monthsByYear } = useMemo(() => {
     const keys = new Set<string>();
     for (const o of data.occupation) {
-      const k = monthKey(o.checkInDate);
+      const k = occMonth(o);
+      if (k) keys.add(k);
+    }
+    for (const e of data.extras) {
+      const k = extraMonth(e);
       if (k) keys.add(k);
     }
     for (const e of data.expenses) {
-      const k = monthKey(e.invoiceDate);
+      const k = expenseMonth(e);
       if (k) keys.add(k);
     }
     // הוצאות חד-פעמיות — נכללות גם הן באפשרויות השנה/חודש (מאגר נפרד, אך אותו פילטר גלובלי)
     for (const e of data.oneTimeExpenses) {
-      const k = monthKey(e.invoiceDate);
+      const k = oneTimeExpenseMonth(e);
       if (k) keys.add(k);
     }
     const yrs = [...new Set([...keys].map((k) => k.split("-")[0]))].sort();
     return { years: yrs, monthsByYear: [...keys].sort() };
-  }, [data.occupation, data.expenses, data.oneTimeExpenses]);
+  }, [data.occupation, data.extras, data.expenses, data.oneTimeExpenses]);
 
   const yearOptions: Option[] = [ALL, ...years.map((y) => ({ value: y, label: y }))];
   const monthOptions: Option[] = [

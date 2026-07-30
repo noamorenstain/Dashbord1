@@ -157,6 +157,7 @@ function buildExtras(): Extra[] {
           incomeType: pickOne(EXTRA_TYPES),
           amount: round2(between(8, 60) + rand()),
           paidBy: pickOne(PAID_BY),
+          month: new Date(Date.UTC(mo.y, mo.m - 1, 1)).toISOString(),
         });
       }
     }

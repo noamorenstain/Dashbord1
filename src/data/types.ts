@@ -58,6 +58,7 @@ export interface Extra {
   incomeType: string; // IncomeType
   amount: number; // Amount
   paidBy: string; // PaidBy
+  month: string | null; // Month — משמש לשיוך לחודש (עדיפות על פני Date)
 }
 
 /** גיליון Maintence (שגיאת כתיב במקור) — תחזוקה / תקלה */
