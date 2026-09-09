@@ -9,6 +9,7 @@ import { UploadBanner } from "./components/UploadBanner";
 import { DashboardPage } from "./pages/Dashboard";
 import { PropertiesPage } from "./pages/Properties";
 import { ProfitLossPage } from "./pages/ProfitLoss";
+import { ComparisonPage } from "./pages/Comparison";
 import { RevenuePage } from "./pages/Revenue";
 import { ExpensesPage } from "./pages/Expenses";
 import { OneTimeExpensesPage } from "./pages/OneTimeExpenses";
@@ -22,6 +23,7 @@ function Pages({ page }: { page: PageKey }) {
     case "dashboard": return <DashboardPage />;
     case "properties": return <PropertiesPage />;
     case "pnl": return <ProfitLossPage />;
+    case "comparison": return <ComparisonPage />;
     case "revenue": return <RevenuePage />;
     case "expenses": return <ExpensesPage />;
     case "oneTimeExpenses": return <OneTimeExpensesPage />;

@@ -43,21 +43,47 @@ export const defaultFilters: Filters = {
  *   הוצאות (Expenses + One-time expenses) -> BillingDate (עמודה I), לא InvoiceDate/PaymentDate
  *   תחזוקה (Maintence)       -> Date
  */
+/** מחזיר את המועמד הראשון שהוא תאריך תקין (לא null וניתן לפרסור) */
+function firstValidISO(...vals: (string | null)[]): string | null {
+  for (const v of vals) {
+    if (!v) continue;
+    const d = new Date(v);
+    if (!isNaN(d.getTime())) return v;
+  }
+  return null;
+}
+
+// --- מפתחי תאריך גולמי (ISO) לפי סוג רשומה — אותו מקור אמת ששיוך-חודש
+// (occMonth וכו') ושיוך-טווח-תאריכים (להשוואת תקופות) שניהם נשענים עליו,
+// כדי שלא תהיה אף פעם אפשרות לשתי לוגיקות שיוך תאריך שונות לאותו סוג רשומה. ---
+export function occDate(o: Occupation): string | null {
+  return o.checkInDate;
+}
+export function extraDate(e: Extra): string | null {
+  return firstValidISO(e.month, e.date);
+}
+export function expenseDate(e: Expense): string | null {
+  return firstValidISO(e.billingDate, e.month, e.invoiceDate);
+}
+export function maintDate(m: Maintenance): string | null {
+  return m.date;
+}
+
 export function occMonth(o: Occupation): string | null {
-  return monthKey(o.checkInDate);
+  return monthKey(occDate(o));
 }
 export function extraMonth(e: Extra): string | null {
-  return monthKey(e.month) ?? monthKey(e.date);
+  return monthKey(extraDate(e));
 }
 export function expenseMonth(e: Expense): string | null {
-  return monthKey(e.billingDate) ?? monthKey(e.month) ?? monthKey(e.invoiceDate);
+  return monthKey(expenseDate(e));
 }
 // הוצאות חד-פעמיות — אותה לוגיקת תאריך (BillingDate קודם), נשמר כפונקציה נפרדת כי מדובר במאגר נפרד
 export function oneTimeExpenseMonth(e: Expense): string | null {
-  return monthKey(e.billingDate) ?? monthKey(e.month) ?? monthKey(e.invoiceDate);
+  return monthKey(expenseDate(e));
 }
 export function maintMonth(m: Maintenance): string | null {
-  return monthKey(m.date);
+  return monthKey(maintDate(m));
 }
 
 function matchPeriod(key: string | null, f: Filters): boolean {
@@ -100,6 +126,123 @@ export function filterDataSet(data: DataSet, f: Filters): DataSet {
     ),
     profitAndLoss: [],
   };
+}
+
+/** טווח תאריכים (כולל את שני הקצוות) — ל"השוואת תקופות" */
+export interface DateRange {
+  start: Date; // UTC, חצות תחילת היום הראשון
+  end: Date; // UTC, סוף היום האחרון (23:59:59.999)
+}
+
+function inRange(iso: string | null, r: DateRange): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return false;
+  return t >= r.start.getTime() && t <= r.end.getTime();
+}
+
+/**
+ * מסנן את מאגר הנתונים לפי טווח תאריכים מדויק (לא לפי "YYYY-MM") — משמש אך
+ * ורק ע"י לשונית "השוואת תקופות", לצורך טווחים שאינם חודש קלנדרי שלם (שבוע,
+ * 7/30 ימים אחרונים, מתחילת החודש/שנה, טווח מותאם אישית).
+ * משתמש באותם שדות תאריך בדיוק כמו filterDataSet/occMonth/expenseMonth וכו'
+ * (Check-in לתפוסה, BillingDate להוצאות, Month ל-Extras, Date לתחזוקה) —
+ * שום כלל שיוך-תאריך חדש לא הומצא כאן, רק הוחלף שיוך-לפי-מפתח-חודש בבדיקת
+ * טווח מדויקת יותר על אותו תאריך עצמו.
+ */
+export function filterDataSetByRange(
+  data: DataSet,
+  f: { propertyId: string; country: string },
+  range: DateRange
+): DataSet {
+  const propIdsInCountry =
+    f.country === "all"
+      ? null
+      : new Set(data.properties.filter((p) => p.country === f.country).map((p) => p.propertyId));
+  const propOk = (id: string) =>
+    (f.propertyId === "all" || id === f.propertyId) &&
+    (propIdsInCountry === null || propIdsInCountry.has(id));
+
+  return {
+    properties: data.properties.filter((p) => propOk(p.propertyId)),
+    platformCommissions: data.platformCommissions.filter((c) => propOk(c.propertyId)),
+    rooms: data.rooms.filter((r) => propOk(r.propertyId)),
+    occupation: data.occupation.filter((o) => propOk(o.propertyId) && inRange(occDate(o), range)),
+    extras: data.extras.filter((e) => propOk(e.propertyId) && inRange(extraDate(e), range)),
+    maintenance: data.maintenance.filter((m) => propOk(m.propertyId) && inRange(maintDate(m), range)),
+    expenses: data.expenses.filter((e) => propOk(e.propertyId) && inRange(expenseDate(e), range)),
+    oneTimeExpenses: data.oneTimeExpenses.filter((e) => propOk(e.propertyId) && inRange(expenseDate(e), range)),
+    profitAndLoss: [],
+  };
+}
+
+export interface DailyPoint {
+  dayIndex: number; // 1..N מתחילת הטווח
+  date: string; // ISO (YYYY-MM-DD)
+  revenue: number;
+  expenses: number;
+  profit: number;
+  occupiedNights: number;
+}
+
+/**
+ * פירוק יומי של הכנסה/הוצאה/רווח לאורך טווח תאריכים — לצורך גרפים חופפים
+ * ("יום 1: נוכחי מול קודם" וכו') בלשונית השוואת תקופות. אותה שיטת הכנסה/
+ * הוצאה בדיוק כמו calcRevenue/calcExpenses (ברוטו + Extras; FullAmount +
+ * תחזוקה + עמלה), רק מפורק ליום בודד לפי אותם שדות תאריך (Check-in/
+ * BillingDate/Month/Date) במקום מסוכם על כל הטווח.
+ */
+export function dailySeriesForRange(
+  data: DataSet,
+  f: { propertyId: string; country: string },
+  range: DateRange
+): DailyPoint[] {
+  const filtered = filterDataSetByRange(data, f, range);
+  const DAY_MS = 86400000;
+  const startUTC = Date.UTC(range.start.getUTCFullYear(), range.start.getUTCMonth(), range.start.getUTCDate());
+  const endUTC = Date.UTC(range.end.getUTCFullYear(), range.end.getUTCMonth(), range.end.getUTCDate());
+  const numDays = Math.round((endUTC - startUTC) / DAY_MS) + 1;
+
+  const points: DailyPoint[] = Array.from({ length: numDays }, (_, i) => ({
+    dayIndex: i + 1,
+    date: new Date(startUTC + i * DAY_MS).toISOString().slice(0, 10),
+    revenue: 0,
+    expenses: 0,
+    profit: 0,
+    occupiedNights: 0,
+  }));
+
+  const idxOf = (iso: string | null): number | null => {
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return null;
+    const dUTC = Date.UTC(new Date(t).getUTCFullYear(), new Date(t).getUTCMonth(), new Date(t).getUTCDate());
+    const idx = Math.round((dUTC - startUTC) / DAY_MS);
+    return idx >= 0 && idx < numDays ? idx : null;
+  };
+
+  for (const o of filtered.occupation) {
+    const idx = idxOf(occDate(o));
+    if (idx !== null) {
+      points[idx].revenue += o.totalPrice;
+      points[idx].expenses += o.commission; // עמלה כשורת הוצאה — עקבי עם calcExpenses
+      points[idx].occupiedNights += o.nights;
+    }
+  }
+  for (const e of filtered.extras) {
+    const idx = idxOf(extraDate(e));
+    if (idx !== null) points[idx].revenue += e.amount;
+  }
+  for (const e of filtered.expenses) {
+    const idx = idxOf(expenseDate(e));
+    if (idx !== null) points[idx].expenses += e.fullAmount;
+  }
+  for (const m of filtered.maintenance) {
+    const idx = idxOf(maintDate(m));
+    if (idx !== null) points[idx].expenses += m.amount;
+  }
+  points.forEach((p) => (p.profit = p.revenue - p.expenses));
+  return points;
 }
 
 // ----------------------- מדדים בסיסיים -----------------------
@@ -162,6 +305,48 @@ export function profitMargin(d: DataSet): number {
   const rev = totalRevenue(d);
   return rev === 0 ? 0 : netProfit(d) / rev;
 }
+
+/**
+ * ============================================================
+ *  שכבת רווחיות מרכזית — מקור אמת יחיד לכל האפליקציה
+ *  ------------------------------------------------------------
+ *  totalRevenue/totalExpenses/netProfit/profitMargin לעיל מחושבים על
+ *  בסיס נטו (TotalNetPrice, שכבר מנוכה ממנו העמלה) ומוצגים במקומות
+ *  ספציפיים כמידע משלים ("הכנסות נטו"). הם *לא* משמשים עוד לחישוב
+ *  "שולי הרווח" הרשמי, כי המכנה שלהם (הכנסה נטו) שונה מהמכנה שה-P&L
+ *  (המקור הסמכותי, לפי בקשת המשתמש) משתמש בו (הכנסה ברוטו).
+ *
+ *  הפונקציות הבאות משכפלות בדיוק את הלוגיקה העסקית שכבר הייתה נכונה
+ *  ב-buildPnL (לשונית רווח והפסד):
+ *    הכנסה  = TotalPrice ברוטו (grossRevenue) + הכנסות נוספות (Extras)
+ *    הוצאה  = FullAmount של כל שורות ה-Expenses (ללא קשר לסטטוס תשלום)
+ *             + תחזוקה (Maintence) + עמלות פלטפורמה (commission), כשורת
+ *             הוצאה נפרדת — בדיוק כפי שמופיע ב-buildPnL.
+ *    רווח   = הכנסה − הוצאה
+ *    שולי רווח = רווח / הכנסה (0% כשההכנסה 0 — לעולם לא Infinity/NaN)
+ *  הוצאות חד-פעמיות (oneTimeExpenses) אף פעם לא נכללות כאן.
+ *
+ *  כל מקום באפליקציה שמציג "רווח נקי" / "שולי רווח" / "הכנסות" / "הוצאות"
+ *  כמדד הרשמי (KPI ראשי, טבלת סיכום נכסים, השוואת תקופות וכו') חייב לקרוא
+ *  לפונקציות האלה — ולא לחשב הכנסה/הוצאה/רווח בעצמו — כדי שאותו נכס +
+ *  אותה תקופה + אותם פילטרים יניבו תמיד בדיוק את אותו מספר בכל מקום.
+ * ============================================================
+ */
+export function calcRevenue(d: DataSet): number {
+  return grossRevenue(d) + additionalIncome(d);
+}
+export function calcExpenses(d: DataSet): number {
+  return expensesFull(d) + maintenanceCost(d) + commissionTotal(d);
+}
+export function calcProfit(d: DataSet): number {
+  return calcRevenue(d) - calcExpenses(d);
+}
+export function calcProfitMargin(d: DataSet): number {
+  const rev = calcRevenue(d);
+  if (!rev) return 0;
+  const m = calcProfit(d) / rev;
+  return isFinite(m) ? m : 0;
+}
 export function bookingsCount(d: DataSet): number {
   return d.occupation.length;
 }
@@ -200,6 +385,37 @@ export function occupancyRate(d: DataSet, f: Filters): number {
   const available = roomCount(d) * periodDays(d, f);
   if (available === 0) return 0;
   return occupiedNights(d) / available;
+}
+
+/**
+ * לילות זמינים להערכת תפוסה על טווח תאריכים מפורש (למשל שבוע/7 ימים/טווח
+ * מותאם אישית) — אותה שיטת הערכה שכבר קיימת בלשונית "תפוסה" (roomCount ×
+ * מספר ימים), רק עם ימים מחושבים מטווח תאריכים מדויק במקום ממפתח חודש/שנה.
+ */
+export function availableNightsForDays(d: DataSet, days: number): number {
+  return roomCount(d) * Math.max(0, days);
+}
+
+/** תפוסה מוערכת על בסיס מספר לילות זמינים נתון (ראו availableNightsForDays) */
+export function occupancyRateFor(d: DataSet, availableNights: number): number {
+  if (availableNights === 0) return 0;
+  return occupiedNights(d) / availableNights;
+}
+
+/** אורך שהייה ממוצע = סך לילות תפוסים / מספר הזמנות */
+export function avgLengthOfStay(d: DataSet): number {
+  const n = bookingsCount(d);
+  return n === 0 ? 0 : occupiedNights(d) / n;
+}
+
+/**
+ * RevPAR — הכנסה להזמנה זמינה = הכנסת חדרים (ברוטו, TotalPrice — אותה
+ * הגדרת "הכנסת אירוח" ש-grossRevenue/ADR כבר משתמשים בה) / לילות זמינים.
+ * שקול ל-ADR × אחוז תפוסה.
+ */
+export function revpar(d: DataSet, availableNights: number): number {
+  if (availableNights === 0) return 0;
+  return grossRevenue(d) / availableNights;
 }
 
 // ----------------------- פילוחים -----------------------
@@ -285,21 +501,26 @@ function statusOf(margin: number, profit: number): PropertySummary["status"] {
   return "profit";
 }
 
-/** סיכום מלא לכל נכס (לאחר החלת הפילטרים) */
+/**
+ * סיכום מלא לכל נכס (לאחר החלת הפילטרים).
+ * הכנסה/הוצאה/רווח/שולי-רווח מחושבים דרך calcRevenue/calcExpenses/calcProfit/
+ * calcProfitMargin — אותה שכבת רווחיות מרכזית שמזינה גם את P&L — כדי שהמספרים
+ * בלשונית "נכסים" (Assets) יהיו זהים תמיד לאלה שב-P&L עבור אותו נכס ואותם פילטרים.
+ */
 export function propertySummaries(data: DataSet, f: Filters): PropertySummary[] {
   const filtered = filterDataSet(data, f);
   return filtered.properties
     .map((p) => {
       const sub = filterDataSet(data, { ...f, propertyId: p.propertyId, country: "all" });
-      const rev = totalRevenue(sub);
-      const profit = netProfit(sub);
-      const margin = rev === 0 ? 0 : profit / rev;
+      const rev = calcRevenue(sub);
+      const profit = calcProfit(sub);
+      const margin = calcProfitMargin(sub);
       return {
         propertyId: p.propertyId,
         propertyName: p.propertyName,
         country: p.country,
         revenue: rev,
-        expenses: totalExpenses(sub),
+        expenses: calcExpenses(sub),
         netProfit: profit,
         margin,
         bookings: bookingsCount(sub),
@@ -480,8 +701,12 @@ export function buildPnL(data: DataSet, propertyId: string, f: Filters): PnLBrea
     b.internet + b.tax + b.maintenance + b.commission + b.accounting +
     b.gas + b.garbage + b.other;
 
-  // רווח נקי לפי שיטת הברוטו (זהה לשיטת הנטו): הכנסה ברוטו − הוצאות כולל עמלה
-  b.netProfit = b.revenueTotalGross - b.expensesTotal;
-  b.margin = b.revenueTotalGross === 0 ? 0 : b.netProfit / b.revenueTotalGross;
+  // רווח נקי ושולי-רווח מחושבים דרך שכבת הרווחיות המרכזית (calcProfit/
+  // calcProfitMargin) — לא באופן עצמאי — כדי שהם יהיו זהים במתמטיקה (ולא רק
+  // בערך המספרי) לכל מקום אחר באפליקציה שמציג רווח/שולי-רווח לאותו נכס/פילטר.
+  // (b.revenueTotalGross/b.expensesTotal לעיל שווים אלגברית ל-calcRevenue/
+  // calcExpenses — הפירוק לפי קטגוריה נשמר כאן רק לצורך טבלת ה-P&L המפורטת.)
+  b.netProfit = calcProfit(d);
+  b.margin = calcProfitMargin(d);
   return b;
 }

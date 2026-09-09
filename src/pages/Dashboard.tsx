@@ -6,10 +6,10 @@ import {
 import { useData } from "../data/DataContext";
 import { useFilters } from "../context/FilterContext";
 import {
-  filterDataSet, totalRevenue, totalExpenses, netProfit, profitMargin,
+  filterDataSet, totalRevenue, calcExpenses, calcProfit, calcProfitMargin,
   occupancyRate, bookingsCount, avgRevenuePerBooking, avgRevenuePerNight,
   propertySummaries, mostProfitable, weakest, monthlySeries, revenueByPlatform,
-  expensesByCategory, monthlyChange, grossRevenue, additionalIncome,
+  expensesByCategory, monthlyChange, calcRevenue,
 } from "../lib/calculations";
 import { fmtEUR, fmtPct, fmtNum } from "../lib/format";
 import { KpiCard } from "../components/ui/KpiCard";
@@ -32,10 +32,13 @@ export function DashboardPage() {
   const worst = weakest(summaries);
   const change = useMemo(() => monthlyChange(d), [d]);
 
-  const grossTotal = grossRevenue(d) + additionalIncome(d); // ברוטו (TotalPrice) + Extras
-  const netTotal = totalRevenue(d); // נטו (TotalNetPrice) + Extras
-  const exp = totalExpenses(d);
-  const profit = netProfit(d);
+  // הכנסה/הוצאה/רווח "רשמיים" — דרך שכבת הרווחיות המרכזית (calcRevenue/
+  // calcExpenses/calcProfit), אותה שכבה שמזינה את P&L, כך שהמספרים כאן
+  // תמיד יהיו זהים לאלה שבלשוניות P&L ונכסים עבור אותם פילטרים.
+  const grossTotal = calcRevenue(d); // ברוטו (TotalPrice) + Extras — = הכנסה הרשמית
+  const netTotal = totalRevenue(d); // נטו (TotalNetPrice) + Extras — מידע משלים בלבד
+  const exp = calcExpenses(d);
+  const profit = calcProfit(d);
 
   const summaryColumns: Column<PropertySummary>[] = [
     { key: "propertyName", header: "נכס", render: (r) => <span className="font-medium text-slate-800">{r.propertyName}</span> },
@@ -72,7 +75,7 @@ export function DashboardPage() {
           tone={profit >= 0 ? "positive" : "negative"}
           delta={change ? { value: fmtPct(change.deltaPct, 0) + " מהחודש הקודם", positive: change.deltaPct >= 0 } : null}
         />
-        <KpiCard label="שולי רווח" value={fmtPct(profitMargin(d))} icon={<Percent size={20} />} tone="brand" />
+        <KpiCard label="שולי רווח" value={fmtPct(calcProfitMargin(d))} icon={<Percent size={20} />} tone="brand" />
         <KpiCard label="תפוסה ממוצעת" value={fmtPct(occupancyRate(d, filters))} icon={<BedDouble size={20} />} tone="brand" hint="הערכה" />
         <KpiCard label="מספר הזמנות" value={fmtNum(bookingsCount(d))} icon={<CalendarCheck size={20} />} tone="default" />
         <KpiCard label="הכנסה ממוצעת להזמנה" value={fmtEUR(avgRevenuePerBooking(d))} icon={<Coins size={20} />} tone="default" />
