@@ -36,7 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "dashboard", label: "דאשבורד ראשי", icon: LayoutDashboard },
   { key: "properties", label: "נכסים", icon: Building2 },
   { key: "pnl", label: "רווח והפסד", icon: TrendingUp },
-  { key: "comparison", label: "השוואת תקופות", icon: GitCompare },
+  { key: "comparison", label: "השוואת תקופות", icon: ArrowLeftRight },
   { key: "revenue", label: "הכנסות", icon: Wallet },
   { key: "expenses", label: "הוצאות", icon: Receipt },
   { key: "oneTimeExpenses", label: "הוצאות חד פעמיות", icon: PackageOpen },
